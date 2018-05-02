@@ -1,0 +1,156 @@
+<!-- This is a simple client app for streaming audio -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Streaming Speech Client</title>
+  <script src="//ajax.googleapis.com/ajax/libs/jquery/1.8.2/jquery.min.js"></script>
+</head>
+  <body>
+    <button id="start">Start</button>
+    <button id="stop" disabled>Stop</button>
+    <br>
+    <label>Language Code:
+      <input id="language" value="en-US">
+    </label>
+    <br>
+    <p id="output"></p>
+  </body>
+  <script>
+    var socket;
+    var audioContext;
+    var processor;
+
+    BUFFER_SIZE = 4096;
+
+    function connect() {
+      socket = new WebSocket('wss://' + location.host + '/ws');
+      socket.binaryType = 'arraybuffer';
+
+      socket.onopen = function() {
+        log('Websocket opened');
+        socket.send(JSON.stringify({
+          punctuation: true,
+          rate: (new AudioContext).sampleRate,
+          language: document.getElementById('language').value,
+          encoding: 'LINEAR16'
+        }));
+
+        log('Recording...');
+        setTimeout(function() {
+          navigator.getUserMedia(
+            // Options
+            {
+              audio: true
+            },
+            // On load
+            function (stream) {
+              console.log('Starting user media');
+              audioContext = new AudioContext();
+              var source = audioContext.createMediaStreamSource(stream);
+              processor = audioContext
+                  .createScriptProcessor(BUFFER_SIZE, 1, 1);
+              processor.onaudioprocess = processAudio;
+              processor.connect(audioContext.destination);
+              source.connect(processor);
+            },
+            // On error
+            function (e) {
+              console.error(e);
+              stop();
+            }
+          );
+        }, 1000);
+      };
+
+      socket.onmessage = function(e) {
+        log("Websocket message: " + e.data);
+        var data = JSON.parse(e.data);
+        console.log(data);
+        var tag = data.isFinal ? 'h3' : 'div';
+        $('#output').append('<' + tag + '>' + data.text + '</' + tag + '>');
+      };
+
+      socket.onclose = function() {
+        log("Websocket closed");
+        stop();
+      };
+
+      socket.onerror = function(e) {
+        log("Websocket error");
+        log(e);
+        stop();
+      };
+
+    }
+
+    function start() {
+      $('#start').attr('disabled', true);
+      $('#stop').removeAttr('disabled');
+      connect();
+    }
+
+    function stop() {
+      $('#stop').attr('disabled', true);
+      $('#start').removeAttr('disabled');
+
+      // Stop audio processing
+      if (audioContext && audioContext.state == 'running') {
+        log('Stopping recording...');
+        processor && (processor.onaudioprocess = function () {});
+        audioContext && audioContext.close();
+        audioContext = undefined;
+        processor = undefined;
+      }
+
+      // Close socket if still open
+      if (socket && socket.readyState == 1) {
+        log('Closing socket');
+        socket && socket.close();
+        socket = undefined;
+      }
+    }
+
+    function processAudio(e) {
+      var float32Array = e.inputBuffer.getChannelData(0) ||
+          new Float32Array(bufferLength);
+
+      // Convert Float32Array to Int16Array
+      var len = float32Array.length;
+      var int16Array = new Int16Array(len);
+      while (len--) {
+        int16Array[len] = Math.min(1, float32Array[len]) * 0x7FFF;
+      }
+
+      socket.send(int16Array.buffer);
+      console.log('Sending data of size: ' + int16Array.length + ' | ' + new Date().toISOString());
+    }
+
+    function log(msg) {
+      console.log(msg);
+    }
+
+    $(function() {
+      // Check support
+      try {
+        // Shims
+        window.AudioContext = window.AudioContext ||
+            window.webkitAudioContext;
+        navigator.getUserMedia = navigator.getUserMedia ||
+            navigator.webkitGetUserMedia;
+        window.URL = window.URL || window.webkitURL;
+        navigator.getUserMedia = navigator.getUserMedia ||
+            navigator.webkitGetUserMedia ||
+            navigator.mozGetUserMedia ||
+            navigator.msGetUserMedia;
+        log('Web audio supported');
+      } catch (e) {
+        console.error('Check support for web audio in browser!');
+      }
+
+      // Click events
+      $('#start').click(function(e) { start(); });
+      $('#stop').click(function(e) { stop(); });
+    });
+  </script>
+</html>
